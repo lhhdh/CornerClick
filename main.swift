@@ -36,16 +36,20 @@ enum CornerAction: String, CaseIterable {
                 openApp("/System/Applications/Launchpad.app")
             }
         case .notificationCenter:
-            shell("/usr/bin/open", ["-b", "com.apple.notificationcenterui"])
-            log("open notificationcenterui")
+            runProcess("/usr/bin/open", ["-b", "com.apple.notificationcenterui"],
+                       label: "notificationcenterui")
         case .screenSaver:
             openApp("/System/Library/CoreServices/ScreenSaverEngine.app")
         case .sleepDisplay:
-            shell("/usr/bin/pmset", ["displaysleepnow"])
+            runProcess("/usr/bin/pmset", ["displaysleepnow"], label: "pmset displaysleepnow")
         case .showDesktop:
-            shell("/usr/bin/osascript", ["-e", "tell application \"System Events\" to key code 103"])
+            runProcess("/usr/bin/osascript",
+                       ["-e", "tell application \"System Events\" to key code 103"],
+                       label: "show desktop")
         case .lockScreen:
-            shell("/usr/bin/osascript", ["-e", "tell application \"System Events\" to keystroke \"q\" using {control down, command down}"])
+            runProcess("/usr/bin/osascript",
+                       ["-e", "tell application \"System Events\" to keystroke \"q\" using {control down, command down}"],
+                       label: "lock screen")
         }
     }
 
@@ -54,16 +58,30 @@ enum CornerAction: String, CaseIterable {
             log("open failed: missing \(path)")
             return
         }
-        let ok = NSWorkspace.shared.open(URL(fileURLWithPath: path))
-        log("open \(path) -> \(ok)")
+        runProcess("/usr/bin/open", [path], label: "open \(path)")
     }
 }
 
-func shell(_ launchPath: String, _ args: [String]) {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: launchPath)
-    p.arguments = args
-    try? p.run()
+let actionQueue = DispatchQueue(label: "cornerclick.action", qos: .userInitiated)
+
+func runProcess(_ launchPath: String, _ arguments: [String], label: String) {
+    let started = Date()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: launchPath)
+    process.arguments = arguments
+    let stderr = Pipe()
+    process.standardError = stderr
+    do {
+        try process.run()
+    } catch {
+        log("\(label) spawn failed: \(error.localizedDescription)")
+        return
+    }
+    process.waitUntilExit()
+    let cost = Int(Date().timeIntervalSince(started) * 1000)
+    let output = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    log("\(label) exit=\(process.terminationStatus) \(cost)ms\(output.isEmpty ? "" : " stderr=\(output)")")
 }
 
 // MARK: - 状态
@@ -117,8 +135,14 @@ let store = Store()
 
 // MARK: - 日志
 
+let logClock: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss.SSS"
+    return f
+}()
+
 func log(_ message: String) {
-    let line = "\(Date().formatted(.iso8601)) \(message)\n"
+    let line = "\(logClock.string(from: Date())) \(message)\n"
     let url = URL(fileURLWithPath: "/tmp/CornerClick.log")
     if let handle = try? FileHandle(forWritingTo: url) {
         handle.seekToEndOfFile()
@@ -173,9 +197,12 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     }
     guard let corner = cornerHit() else { return Unmanaged.passUnretained(event) }
     let action = store.action(for: corner)
-    log("click at \(corner) -> \(action.rawValue)")
-    guard action != .none else { return Unmanaged.passUnretained(event) }
-    action.perform()
+    guard action != .none else {
+        log("click at \(corner) -> none")
+        return Unmanaged.passUnretained(event)
+    }
+    log("fire \(corner) -> \(action.rawValue)")
+    actionQueue.async { action.perform() }
     return store.swallow ? nil : Unmanaged.passUnretained(event)
 }
 
@@ -314,6 +341,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let openLog = NSMenuItem(title: "打开日志…", action: #selector(showLog), keyEquivalent: "")
+        openLog.target = self
+        menu.addItem(openLog)
+
         let perm = NSMenuItem(title: "重新授权辅助功能…", action: #selector(grantAccessibility), keyEquivalent: "")
         perm.target = self
         menu.addItem(perm)
@@ -373,6 +404,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let action = CornerAction.allCases[sender.tag]
         store.setAction(action, for: corner)
         rebuildMenu()
+    }
+
+    @objc func showLog() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/CornerClick.log"))
     }
 
     @objc func grantAccessibility() {

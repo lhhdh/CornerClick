@@ -105,7 +105,7 @@ killall Dock
 
 1. **全局点击监听**：用 `CGEventTap` 在 `.cgSessionEventTap` 上监听 `leftMouseDown`。tap 建在 `.headInsertEventTap` 位置，因此点击在分发到目标应用之前就能被判断；选择「吞掉角落点击」时直接返回 `nil` 丢弃事件。
 2. **角落判定**：读取 `NSEvent.mouseLocation`（Cocoa 全局坐标，原点在主屏左下角），遍历 `NSScreen.screens`，找到点击所在的屏幕，计算该点到四条边的距离；两个方向都落在判定区内才算命中角落。
-3. **动作执行**：按角落查表，用 `NSWorkspace` 打开系统 App，或用 `Process` 调用 `pmset` / `osascript`。
+3. **动作执行**：按角落查表，在一条**串行后台队列**上执行，用 `open(1)` 打开系统 App，或调用 `pmset` / `osascript`。动作不在主线程上跑，避免阻塞事件 tap 的回调——这是连点时丢点击的主要原因。
 4. **权限与签名**：macOS 的 TCC 把辅助功能授权绑定到「代码要求」上。ad-hoc 签名的代码要求里钉死二进制哈希，每次重编译都会被当成一个新程序，之前的勾选失效；用真实证书（如 Apple Development）签名时要求是「标识 + 证书」，重编译后授权仍然有效。CornerClick 的 `build.sh` 优先使用证书签名。
 5. **恢复监听**：系统在超时或用户输入后会临时禁用事件 tap，回调里收到 `tapDisabledByTimeout` / `tapDisabledByUserInput` 时立即重新启用；权限尚未授予时每 2 秒重试一次。
 
@@ -131,11 +131,11 @@ tail -f /tmp/CornerClick.log
 正常一次触发会留下两行：
 
 ```
-2026-11-09T10:22:06Z click at br -> launchpad
-2026-11-09T10:22:06Z open /System/Applications/Apps.app -> true
+18:22:06.412 fire br -> launchpad
+18:22:06.451 open /System/Applications/Apps.app exit=0 38ms
 ```
 
-- 只有 `click at ...` 没有 `open ...`：该角配置的是「无」
+- 只有 `click at ... -> none`：该角配置的是「无」
 - `open ... -> false`：系统拒绝了打开请求
 - `open failed: missing ...`：目标 App 在该系统版本上不存在
 - 连 `click at ...` 都没有：事件 tap 没建起来，看下一节
