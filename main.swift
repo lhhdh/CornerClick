@@ -1,5 +1,6 @@
 import Cocoa
 import ApplicationServices
+import ServiceManagement
 
 let appsPath = "/System/Applications/Apps.app"
 
@@ -255,8 +256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if startTap() { return }
         requestAccessibility()
         showPermissionAlert()
-        retry = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
-            guard tapPort == nil else { return }
+        retry = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { timer in
+            guard tapPort == nil else {
+                timer.invalidate()
+                return
+            }
             if startTap() { self.rebuildMenu() }
         }
     }
@@ -357,6 +361,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let login = NSMenuItem(title: "开机自动启动", action: #selector(toggleLoginItem), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(login)
+
         let openLog = NSMenuItem(title: "打开日志…", action: #selector(showLog), keyEquivalent: "")
         openLog.target = self
         menu.addItem(openLog)
@@ -427,6 +436,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
     }
 
+    @objc func toggleLoginItem() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+                log("login item unregistered")
+            } else {
+                try service.register()
+                log("login item registered")
+            }
+        } catch {
+            log("login item failed: \(error.localizedDescription)")
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+        }
+        rebuildMenu()
+    }
+
     @objc func showLog() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/CornerClick.log"))
     }
@@ -441,6 +467,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func quit() {
         NSApp.terminate(nil)
     }
+}
+
+// MARK: - 命令行控制登录项
+
+func loginItemStatusName(_ status: SMAppService.Status) -> String {
+    switch status {
+    case .enabled: return "enabled"
+    case .notRegistered: return "notRegistered"
+    case .notFound: return "notFound"
+    case .requiresApproval: return "requiresApproval"
+    @unknown default: return "unknown"
+    }
+}
+
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--login-item" {
+    let service = SMAppService.mainApp
+    if CommandLine.arguments.count >= 3 {
+        do {
+            switch CommandLine.arguments[2] {
+            case "register": try service.register()
+            case "unregister": try service.unregister()
+            default: break
+            }
+        } catch {
+            print("error: \(error.localizedDescription)")
+        }
+    }
+    print("status=\(loginItemStatusName(service.status))")
+    exit(0)
 }
 
 // MARK: - 启动

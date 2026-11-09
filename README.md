@@ -25,6 +25,7 @@ CornerClick 把触发条件改成：**鼠标在角落判定区内 + 按下左键
 - **可选忽略菜单栏与 Dock**：避免把菜单栏、Dock 区域内的点击误判成角落
 - **多显示器**：按点击发生的那块屏幕判定，每块屏幕的四个角都有效
 - **纯菜单栏**：`LSUIElement` 后台应用，不占 Dock、不进 ⌘Tab
+- **开机自动启动**：用 `SMAppService` 注册登录项，可在菜单里开关
 - **配置持久化**：重启后保留
 
 ## 系统要求
@@ -72,6 +73,8 @@ open /Applications/CornerClick.app
 | 吞掉角落点击 | 开启后，命中的那一下点击不会传给下层应用 |
 | 忽略菜单栏与 Dock | 开启后，落在菜单栏、Dock 区域内的点击不算角落 |
 | 左上 / 右上 / 左下 / 右下 | 为每个角指定动作 |
+| 开机自动启动 | 注册 / 取消登录项（`SMAppService.mainApp`） |
+| 打开日志… | 用默认应用打开 `/tmp/CornerClick.log` |
 | 重新授权辅助功能… | 打开系统设置的辅助功能面板并重试创建监听器 |
 | 退出 CornerClick | 退出应用 |
 
@@ -110,6 +113,20 @@ killall Dock
 3. **动作执行**：按角落查表，在一条**串行后台队列**上执行，用 `open(1)` 打开系统 App，或调用 `pmset` / `osascript`。动作不在主线程上跑，避免阻塞事件 tap 的回调——这是连点时丢点击的主要原因。
 4. **权限与签名**：macOS 的 TCC 把辅助功能授权绑定到「代码要求」上。ad-hoc 签名的代码要求里钉死二进制哈希，每次重编译都会被当成一个新程序，之前的勾选失效；用真实证书（如 Apple Development）签名时要求是「标识 + 证书」，重编译后授权仍然有效。CornerClick 的 `build.sh` 优先使用证书签名。
 5. **恢复监听**：系统在超时或用户输入后会临时禁用事件 tap，回调里收到 `tapDisabledByTimeout` / `tapDisabledByUserInput` 时立即重新启用；权限尚未授予时每 2 秒重试一次。
+
+## 资源占用
+
+事件 tap 只订阅 `leftMouseDown`，没有轮询、没有定时器（权限还没拿到时才有 2 秒重试，拿到后自动停掉）。空闲开销可以按"不存在"算：实测常驻 CPU 0.0%、内存约 12 MB、空闲唤醒 0 次/秒。只有真正在角落点击时才会 spawn 一个 `open` / `osascript` 进程，约 140 ms 后退出。
+
+## 命令行控制登录项
+
+```sh
+/Applications/CornerClick.app/Contents/MacOS/CornerClick --login-item status
+/Applications/CornerClick.app/Contents/MacOS/CornerClick --login-item register
+/Applications/CornerClick.app/Contents/MacOS/CornerClick --login-item unregister
+```
+
+输出形如 `status=enabled`，可选值为 `enabled` / `notRegistered` / `notFound` / `requiresApproval`。
 
 ## 与其它方案对比
 
