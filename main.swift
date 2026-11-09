@@ -105,6 +105,10 @@ final class Store {
         get { defaults.object(forKey: "swallow") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "swallow") }
     }
+    var coalesceMS: Int {
+        get { defaults.object(forKey: "coalesceMS") as? Int ?? 350 }
+        set { defaults.set(newValue, forKey: "coalesceMS") }
+    }
     var ignoreSystemBars: Bool {
         get { defaults.object(forKey: "ignoreSystemBars") as? Bool ?? false }
         set { defaults.set(newValue, forKey: "ignoreSystemBars") }
@@ -186,6 +190,7 @@ func cornerHit() -> String? {
 // MARK: - 全局点击监听
 
 var tapPort: CFMachPort?
+var lastFire: [String: Date] = [:]
 
 let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -201,6 +206,12 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
         log("click at \(corner) -> none")
         return Unmanaged.passUnretained(event)
     }
+    let window = Double(store.coalesceMS) / 1000
+    if window > 0, let last = lastFire[corner], Date().timeIntervalSince(last) < window {
+        log("skip \(corner) (coalesced, \(store.coalesceMS)ms)")
+        return store.swallow ? nil : Unmanaged.passUnretained(event)
+    }
+    lastFire[corner] = Date()
     log("fire \(corner) -> \(action.rawValue)")
     actionQueue.async { action.perform() }
     return store.swallow ? nil : Unmanaged.passUnretained(event)
@@ -291,6 +302,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                              current: store.size,
                              selector: #selector(setSize(_:))))
 
+        menu.addItem(submenu("连点合并",
+                             options: [(0, "关闭"), (150, "150 ms"), (250, "250 ms"), (350, "350 ms"), (600, "600 ms")].map { (CGFloat($0), $1) },
+                             current: CGFloat(store.coalesceMS),
+                             selector: #selector(setCoalesce(_:))))
+
         let mods: [(CGEventFlags, String)] = [
             ([], "无（直接点击）"),
             (.maskShift, "⇧ Shift"),
@@ -379,6 +395,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func setSize(_ sender: NSMenuItem) {
         if let v = sender.representedObject as? Double { store.size = CGFloat(v) }
+        rebuildMenu()
+    }
+
+    @objc func setCoalesce(_ sender: NSMenuItem) {
+        if let v = sender.representedObject as? Double { store.coalesceMS = Int(v) }
         rebuildMenu()
     }
 
